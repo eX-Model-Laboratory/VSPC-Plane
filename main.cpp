@@ -1,13 +1,17 @@
 #include <Arduino.h>
 #include <Servo.h>
 #include <Tiny4kOLED.h>
+#include <Adafruit_PWMServoDriver.h>
+
+#define SERVOMIN 125
+#define SERVOMAX 625
 
 typedef struct Aileron_s {
-	Servo servo;
+	Adafruit_PWMServoDriver* board;
 	unsigned char angle;
 	unsigned int delay;
 	unsigned int then;
-	int pin;
+	int index;
 } Aileron_t;
 
 Aileron_t left_aileron;
@@ -29,6 +33,8 @@ typedef char dir_t;
 unsigned char roll_speed = 10;
 unsigned char roll_offset = 60;
 dir_t roll_dir = LEFT;
+
+Adafruit_PWMServoDriver pca9685 = Adafruit_PWMServoDriver(0x40);
 
 unsigned char Bound(unsigned char a, unsigned char min, unsigned char max){
 	if(a < min){
@@ -53,21 +59,21 @@ char Dir(dir_t d){
 	return (d < 0)?(LEFT):(RIGHT);
 }
 
-void Aileron_Attach(Aileron_t* air, int pin){
-	air->pin = pin;
-	air->servo.attach(air->pin);
+int angleToPulse(int ang) {
+	// ang = Bound(ang, 0, 180);
+	return map(ang, 0, 180, SERVOMIN, SERVOMAX);
 }
 
 void Aileron_Update_Delay(Aileron_t* air){
 	unsigned int now = millis();
 	if(now - air->then > air->delay){
 		air->then = now;
-		air->servo.write(air->angle);
+		(*air->board).setPWM(air->index,0,angleToPulse(air->angle));
 	}
 }
 
 void Aileron_Update(Aileron_t* air){
-	air->servo.write(air->angle);
+	(*air->board).setPWM(air->index,0,angleToPulse(air->angle));
 }
 
 
@@ -101,14 +107,14 @@ void Ailerons_Roll(Aileron_t* lair, Aileron_t* rair, dir_t direction){
 	switch(roll_dir){
 		case LEFT:
 			lair->angle = lair->angle + roll_speed;
-			rair->angle = rair->angle - roll_speed;
+			rair->angle = rair->angle + roll_speed;
 			lair->angle = Bound(lair->angle, 90 - roll_offset, 90 + roll_offset);
 			rair->angle = Bound(rair->angle, 90 - roll_offset, 90 + roll_offset);
 		break;
 
 		case RIGHT:
 			lair->angle = lair->angle - roll_speed;
-			rair->angle = rair->angle + roll_speed;
+			rair->angle = rair->angle - roll_speed;
 			lair->angle = Bound(lair->angle, 90 - roll_offset, 90 + roll_offset);
 			rair->angle = Bound(rair->angle, 90 - roll_offset, 90 + roll_offset);
 		break;
@@ -120,7 +126,7 @@ void Ailerons_Roll(Aileron_t* lair, Aileron_t* rair, dir_t direction){
 
 		case LEFT_NONE:
 			lair->angle = lair->angle - roll_speed;
-			rair->angle = rair->angle + roll_speed;
+			rair->angle = rair->angle - roll_speed;
 			if(lair->angle <= 90){
 				lair->angle = 90;
 				rair->angle = 90;
@@ -130,7 +136,7 @@ void Ailerons_Roll(Aileron_t* lair, Aileron_t* rair, dir_t direction){
 
 		case RIGHT_NONE:
 			lair->angle = lair->angle + roll_speed;
-			rair->angle = rair->angle - roll_speed;
+			rair->angle = rair->angle + roll_speed;
 			if(rair->angle <= 90){
 				lair->angle = 90;
 				rair->angle = 90;
@@ -171,8 +177,13 @@ void setup(){
 	right_aileron.delay = 0;
 	left_aileron.angle = 90;
 	right_aileron.angle = 90;
-	Aileron_Attach(&left_aileron,A0);
-	Aileron_Attach(&right_aileron,A1);
+	left_aileron.index = 0;
+	right_aileron.index = 1;
+	left_aileron.board = &pca9685;
+	right_aileron.board = &pca9685;
+
+	pca9685.begin();
+	pca9685.setPWMFreq(60);
 
 	pinMode(2, INPUT);
 	pinMode(3, INPUT);
@@ -200,11 +211,6 @@ void loop(){
 
 	if(digitalRead(3) == LOW){
 		if(d234 & 0x02 > 0){
-			// if(selected){
-			// 	left_aileron.angle = Bound(left_aileron.angle + 10,0,180);
-			// }else{
-			// 	right_aileron.angle = Bound(right_aileron.angle + 10,0,180);
-			// }
 			Ailerons_Roll(&left_aileron,&right_aileron,LEFT);
 			noMove = 0;
 			d234 = d234 & ~0x02;
@@ -215,17 +221,6 @@ void loop(){
 
 	if(digitalRead(2) == LOW){
 		if(d234 & 0x04 > 0){
-			// if(selected){
-			// 	left_aileron.angle = left_aileron.angle - 10;
-			// 	if(left_aileron.angle > 180){
-			// 		left_aileron.angle = 0;
-			// 	}
-			// }else{
-			// 	right_aileron.angle = right_aileron.angle - 10;
-			// 	if(right_aileron.angle > 180){
-			// 		right_aileron.angle = 0;
-			// 	}
-			// }
 			Ailerons_Roll(&left_aileron,&right_aileron,RIGHT);
 			noMove = 0;
 			d234 = d234 & ~0x04;
@@ -238,9 +233,6 @@ void loop(){
 	if(noMove){
 		Ailerons_Roll(&left_aileron,&right_aileron,NONE);
 	}
-
-	// Aileron_Update(&left_aileron);
-	// Aileron_Update(&right_aileron);
 
 	if(now - then1 >= 100){
 		display_rotation();
